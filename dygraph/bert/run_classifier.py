@@ -32,11 +32,11 @@ import paddle
 import paddle.fluid as fluid
 from paddle.fluid.dygraph import to_variable
 import reader.cls as reader
-from model.bert import BertConfig
+from model.bert import BertConfig # kaki
 from model.cls import ClsModelLayer
 from optimization import Optimizer
 from utils.args import ArgumentGroup, print_arguments, check_cuda
-from utils.init import init_from_static_model
+from utils.init import init_from_static_model # kaki
 
 # yapf: disable
 parser = argparse.ArgumentParser(__doc__)
@@ -143,7 +143,7 @@ def train(args):
                                       shuffle=args.shuffle,
                                       shuffle_seed=shuffle_seed)
     num_train_examples = processor.get_num_examples(phase='train')
-    max_train_steps = args.epoch * num_train_examples // args.batch_size // trainer_count
+    max_train_steps = 1 # args.epoch * num_train_examples // args.batch_size // trainer_count
     warmup_steps = int(max_train_steps * args.warmup_proportion)
 
     print("Device count: %d" % dev_count)
@@ -175,7 +175,7 @@ def train(args):
                     parameter_list=cls_model.parameters())
 
         if args.init_pretraining_params:
-            print("Load pre-trained model from %s" % args.init_pretraining_params)
+            # print("Load pre-trained model from %s" % args.init_pretraining_params)
             init_from_static_model(args.init_pretraining_params, cls_model, bert_config)
 
         if args.use_data_parallel:
@@ -187,6 +187,9 @@ def train(args):
 
         ce_time = []
         ce_acc = []
+        # print(cls_model.state_dict().keys())
+        # print(cls_model.state_dict()['bert_layer._src_emb.weight'])
+        """
         for batch in train_data_generator():
             data_ids = create_data(batch)
             loss, accuracy, num_seqs = cls_model(data_ids)
@@ -221,6 +224,7 @@ def train(args):
             fluid.save_dygraph(
                 cls_model.state_dict(),
                 save_path)
+            print(cls_model.state_dict())
             fluid.save_dygraph(
                 optimizer.optimizer.state_dict(),
                 save_path)
@@ -236,7 +240,7 @@ def train(args):
                 print("ce info error")
             print("kpis\ttrain_duration_card%s\t%s" % (dev_count, _time))
             print("kpis\ttrain_acc_card%s\t%f" % (dev_count, _acc))
-
+        """
         return cls_model
 
 def predict(args, cls_model = None):
@@ -277,7 +281,7 @@ def predict(args, cls_model = None):
 
             #restore the model
             save_path = os.path.join(args.checkpoints, "final")
-            print("Load params from %s" % save_path)
+            # print("Load params from %s" % save_path)
             model_dict,_ = fluid.load_dygraph(save_path)
             cls_model.load_dict(model_dict)
 
@@ -299,7 +303,6 @@ def predict(args, cls_model = None):
             total_num_seqs.extend(np_num_seqs)
 
         print("[evaluation] average acc: %f" % (np.sum(total_acc) / np.sum(total_num_seqs)))
-
 
 if __name__ == '__main__':
 

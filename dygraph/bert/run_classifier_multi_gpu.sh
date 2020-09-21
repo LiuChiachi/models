@@ -1,10 +1,10 @@
 #!/bin/bash
 
-BERT_BASE_PATH="./data/pretrained_models/uncased_L-12_H-768_A-12/"
+BERT_BASE_PATH="/Download/data/pretrained_models/uncased_L-12_H-768_A-12"
 TASK_NAME='MNLI'
-DATA_PATH="./data/glue_data/MNLI/"
-CKPT_PATH="./data/saved_model/mnli_models"
-GPU_TO_USE=0,1,2,3
+DATA_PATH="/Download/data/glue_data/MNLI/"
+CKPT_PATH="/Download/data/saved_model/mnli_models"
+GPU_TO_USE=0,1,2,3,4,5,6,7
 
 # start fine-tuning
 python -m paddle.distributed.launch --selected_gpus=$GPU_TO_USE --log_dir ./cls_log run_classifier.py \
@@ -29,5 +29,3 @@ python -m paddle.distributed.launch --selected_gpus=$GPU_TO_USE --log_dir ./cls_
     --learning_rate 5e-5 \
     --skip_steps 10 \
     --shuffle true
-
-

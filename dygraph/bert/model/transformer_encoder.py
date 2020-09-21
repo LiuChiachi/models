@@ -322,13 +322,15 @@ class EncoderSubLayer(Layer):
 
         attn_output = self._multihead_attention_layer(pre_process_multihead,
                                                       None, None, attn_bias)
+        print(attn_output[0][0][:50])
         attn_output = self._postprocess_layer(attn_output, enc_input)
-
+        print(attn_output[0][0][:50])
         pre_process2_output = self._preprocess_layer2(attn_output)
-
         ffd_output = self._positionwise_feed_forward(pre_process2_output)
-
-        return self._postprocess_layer2(ffd_output, attn_output)
+        print(ffd_output[0][0][:50])
+        out = self._postprocess_layer2(ffd_output, attn_output)
+        print(out[0][0][:50])
+        return out
 
 
 class EncoderLayer(Layer):
@@ -391,5 +393,8 @@ class EncoderLayer(Layer):
         for i in range(self._n_layer):
             enc_output = self._encoder_sublayers[i](enc_input, attn_bias)
             enc_input = enc_output
+            # if i == 0:
+                # print(enc_input[0][0][:50])
+            
 
         return self._preprocess_layer(enc_output)

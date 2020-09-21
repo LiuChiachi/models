@@ -23,10 +23,15 @@ import numpy as np
 
 import paddle
 import paddle.fluid as fluid
-from paddle.fluid.dygraph import Embedding, LayerNorm, Linear, to_variable, Layer, guard
+from paddle import to_variable
+from paddle.nn import Layer, Embedding, LayerNorm, Linear
+from paddle.fluid.dygraph import Dropout
+from paddle.nn.layer.transformer import TransformerEncoderLayer, TransformerEncoder
 
-from model.transformer_encoder import EncoderLayer, PrePostProcessLayer
-
+"""
+def seperate_param_initializer_to_weight_and_bias(param_initializer):
+    return None, None
+"""
 
 class BertConfig(object):
     def __init__(self, config_path):
@@ -52,13 +57,11 @@ class BertConfig(object):
 
 
 class BertModelLayer(Layer):
-    """
+    """"
     bert
     """
-
     def __init__(self, config, return_pooled_out=True, use_fp16=False):
         super(BertModelLayer, self).__init__()
-
         self._emb_size = config['hidden_size']
         self._n_layer = config['num_hidden_layers']
         self._n_head = config['num_attention_heads']
@@ -68,6 +71,7 @@ class BertModelLayer(Layer):
         self._hidden_act = config['hidden_act']
         self._prepostprocess_dropout = config['hidden_dropout_prob']
         self._attention_dropout = config['attention_probs_dropout_prob']
+
         self.return_pooled_out = return_pooled_out
 
         self._word_emb_name = "word_embedding"
@@ -104,23 +108,27 @@ class BertModelLayer(Layer):
             bias_attr="pooled_fc.b_0",
             act="tanh")
 
-        self.pre_process_layer = PrePostProcessLayer(
-            "nd", self._emb_size, self._prepostprocess_dropout, "")
+        self.add_sublayer("layer_norm_0", LayerNorm(
+                                        normalized_shape=self._emb_size,
+                                        param_attr=fluid.ParamAttr(
+                                            name="_layer_norm_scale",
+                                            initializer=fluid.initializer.Constant(1.)),
+                                        bias_attr=fluid.ParamAttr(
+                                            name="_layer_norm_bias",
+                                            initializer=fluid.initializer.Constant(0.))))
+        self.pre_process_d = Dropout(self._prepostprocess_dropout)
 
-        self._encoder = EncoderLayer(
-            hidden_act=self._hidden_act,
-            n_layer=self._n_layer,
-            n_head=self._n_head,
-            d_key=self._emb_size // self._n_head,
-            d_value=self._emb_size // self._n_head,
-            d_model=self._emb_size,
-            d_inner_hid=self._emb_size * 4,
-            prepostprocess_dropout=self._prepostprocess_dropout,
-            attention_dropout=self._attention_dropout,
-            relu_dropout=0,
-            preprocess_cmd="",
-            postprocess_cmd="dan",
-            param_initializer=self._param_initializer)
+        self._encoder_layer = TransformerEncoderLayer(
+                    d_model=self._emb_size,
+                    nhead=self._n_head,
+                    dim_feedforward=self._emb_size * 4,
+                    dropout=self._prepostprocess_dropout,
+                    activation=self._hidden_act,
+                    attn_dropout=self._attention_dropout,
+                    act_dropout=0,
+                    normalize_before=False)
+        self._encoder = TransformerEncoder(self._encoder_layer, self._n_layer)
+
 
     def forward(self, src_ids, position_ids, sentence_ids, input_mask):
         """
@@ -133,8 +141,9 @@ class BertModelLayer(Layer):
         emb_out = src_emb + pos_emb
         emb_out = emb_out + sent_emb
 
-        emb_out = self.pre_process_layer(emb_out)
-        # print(emb_out[0][0][:50])
+        emb_out = self._sub_layers["layer_norm_0"](emb_out)
+        emb_out = self.pre_process_d(emb_out)
+
         self_attn_mask = fluid.layers.matmul(
             x=input_mask, y=input_mask, transpose_y=True)
         self_attn_mask = fluid.layers.scale(
@@ -155,11 +164,10 @@ class BertModelLayer(Layer):
 
         return enc_output, next_sent_feat
 
-
 class PretrainModelLayer(Layer):
-    """
-    pretrain model
-    """
+    
+    # pretrain model
+   
 
     def __init__(self,
                  config,
@@ -183,8 +191,16 @@ class PretrainModelLayer(Layer):
         self.bert_layer = BertModelLayer(
             config=self.config, return_pooled_out=True, use_fp16=self.use_fp16)
 
-        self.pre_process_layer = PrePostProcessLayer(
-            "n", self._emb_size, self._prepostprocess_dropout, "pre_encoder")
+        # self.pre_process_layer = PrePostProcessLayer(
+            # "n", self._emb_size, self._prepostprocess_dropout, "pre_encoder")
+        self.pre_process_n = LayerNorm(
+                            normalized_shape=self._emb_size,
+                            param_attr=fluid.ParamAttr(
+                                name="pre_encoder_layer_norm_scale",
+                                initializer=fluid.initializer.Constant(1.)),
+                            bias_attr=fluid.ParamAttr(
+                                name="pre_encoder_layer_norm_bias",
+                                initializer=fluid.initializer.Constant(0.)))
 
         self.pooled_fc = Linear(
             input_dim=self._emb_size,
@@ -223,33 +239,33 @@ class PretrainModelLayer(Layer):
 
     def forward(self, src_ids, position_ids, sentence_ids, input_mask,
                 mask_label, mask_pos, labels):
-        """
-        forward
-        """
+      
+        # forward
+       
         mask_pos = fluid.layers.cast(x=mask_pos, dtype='int32')
 
         enc_output, next_sent_feat = self.bert_layer(src_ids, position_ids,
                                                      sentence_ids, input_mask)
+
         reshaped_emb_out = fluid.layers.reshape(
             x=enc_output, shape=[-1, self._emb_size])
 
         mask_feat = fluid.layers.gather(input=reshaped_emb_out, index=mask_pos)
-
         mask_trans_feat = self.pooled_fc(mask_feat)
-        mask_trans_feat = self.pre_process_layer(None, mask_trans_feat, "n",
-                                                 self._prepostprocess_dropout)
+        # mask_trans_feat = self.pre_process_layer(mask_trans_feat)
+        mask_trans_feat = self.pre_process_n(mask_trans_feat)
 
         if self._weight_sharing:
             fc_out = fluid.layers.matmul(
                 x=mask_trans_feat,
-                y=self.bert_layer._src_emb._w,
+                y=self.bert_layer._src_emb.weight,
                 transpose_y=True)
             fc_out += self.fc_create_params
         else:
             fc_out = self.out_fc(mask_trans_feat)
 
-        mask_lm_loss = fluid.layers.softmax_with_cross_entropy(
-            logits=fc_out, label=mask_label)
+        mask_lm_loss, mask_lm_softmax = fluid.layers.softmax_with_cross_entropy(
+            logits=fc_out, label=mask_label, return_softmax=True)
         mean_mask_lm_loss = fluid.layers.mean(mask_lm_loss)
 
         next_sent_fc_out = self.next_sent_fc(next_sent_feat)
@@ -257,10 +273,11 @@ class PretrainModelLayer(Layer):
         next_sent_loss, next_sent_softmax = fluid.layers.softmax_with_cross_entropy(
             logits=next_sent_fc_out, label=labels, return_softmax=True)
 
+        lm_acc = fluid.layers.accuracy(input=mask_lm_softmax, label=mask_label)
+
         next_sent_acc = fluid.layers.accuracy(
             input=next_sent_softmax, label=labels)
-
         mean_next_sent_loss = fluid.layers.mean(next_sent_loss)
 
         loss = mean_next_sent_loss + mean_mask_lm_loss
-        return next_sent_acc, mean_mask_lm_loss, loss
+        return lm_acc, next_sent_acc, mean_mask_lm_loss, loss
